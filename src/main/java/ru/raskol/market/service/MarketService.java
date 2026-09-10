@@ -3,6 +3,7 @@ package ru.raskol.market.service;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Chest;
@@ -11,12 +12,14 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.model.MarketRegion;
 import ru.raskol.market.model.Stall;
 
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.UUID;
 
-/** Логика рынка: аренда, досрочная сдача, возврат остатков, обработка истечений. */
+/** Логика рынка: аренда, сдача, возврат, истечения, налог с продаж. */
 public final class MarketService {
 
     private final RaskolMarket plugin;
@@ -32,10 +35,7 @@ public final class MarketService {
     /* ================= АРЕНДА ================= */
 
     public void rent(Player player, Stall stall) {
-        if (stall.isRented()) {
-            player.sendMessage("§cЭтот прилавок уже арендован.");
-            return;
-        }
+        if (stall.isRented()) { player.sendMessage("§cЭтот прилавок уже арендован."); return; }
         int maxPerPlayer = plugin.getConfig().getInt("rent.max-per-player", 1);
         if (maxPerPlayer > 0 && repository.countRentedBy(player.getUniqueId()) >= maxPerPlayer) {
             player.sendMessage("§cТы уже арендовал максимум лавок (" + maxPerPlayer + ").");
@@ -55,34 +55,25 @@ public final class MarketService {
         stall.setReclaimUntil(0);
         stall.getReclaimItems().clear();
         repository.save();
-
         player.sendMessage("§aАренда оформлена! Срок: §e" + (seconds / 60) + " минут§a.");
-        player.sendMessage("§7Открой сундук и выложи товары.");
-        plugin.getLogger().info("[Market] rent: " + player.getName()
-                + " @ " + stall.getKey() + " price=" + price + " seconds=" + seconds);
+        player.sendMessage("§7Открой сундук, выложи товары, назначь цены: §e/market price <материал> <цена>");
+        plugin.getLogger().info("[Market] rent: " + player.getName() + " @ " + stall.getKey()
+                + " price=" + price + " seconds=" + seconds);
     }
 
-    /* ================= ДОСРОЧНАЯ СДАЧА ================= */
+    /* ================= СДАЧА / ВОЗВРАТ ================= */
 
     public void cancel(Player player, Stall stall) {
-        if (!player.getUniqueId().equals(stall.getOwner())) {
-            player.sendMessage("§cЭто не ваша лавка.");
-            return;
-        }
-        if (!stall.isRented()) {
-            player.sendMessage("§cЛавка не арендована.");
-            return;
-        }
-        long reclaimWindow = plugin.getConfig().getLong("reclaim.window-seconds", 86400);
+        if (!player.getUniqueId().equals(stall.getOwner())) { player.sendMessage("§cЭто не ваша лавка."); return; }
+        if (!stall.isRented()) { player.sendMessage("§cЛавка не арендована."); return; }
+        long window = plugin.getConfig().getLong("reclaim.window-seconds", 86400);
         stall.setReclaimOwner(stall.getOwner());
-        stall.setReclaimUntil(System.currentTimeMillis() + reclaimWindow * 1000L);
+        stall.setReclaimUntil(System.currentTimeMillis() + window * 1000L);
         stall.setOwner(null);
         stall.setExpiresAt(0);
         repository.save();
         player.sendMessage("§aЛавка сдана досрочно. Забери остатки: §e/market reclaim");
     }
-
-    /* ================= ВОЗВРАТ ОСТАТКОВ ================= */
 
     public void reclaim(Player player, Stall stall) {
         if (stall.getReclaimOwner() == null || !stall.getReclaimOwner().equals(player.getUniqueId())) {
@@ -96,18 +87,72 @@ public final class MarketService {
             repository.save();
             return;
         }
-        // reclaimItems (если что-то попало сюда через код — выдаём)
         for (ItemStack item : stall.getReclaimItems()) {
             HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
-            for (ItemStack drop : overflow.values()) {
-                player.getWorld().dropItem(player.getLocation(), drop);
-            }
+            for (ItemStack drop : overflow.values()) player.getWorld().dropItem(player.getLocation(), drop);
         }
         stall.getReclaimItems().clear();
         stall.setReclaimOwner(null);
         stall.setReclaimUntil(0);
         repository.save();
-        player.sendMessage("§aОстатки возвращены. Содержимое сундука можешь забрать обычным ПКМ.");
+        player.sendMessage("§aОстатки возвращены. Содержимое сундука забери обычным ПКМ.");
+    }
+
+    /* ================= НАЛОГ С ПРОДАЖ ================= */
+
+    /** 5% (tax.percent) уходят в казну: Towny-банк города → фолбэк аккаунт → сжигание. */
+    public void paySaleTax(MarketRegion region, double tax) {
+        if (tax <= 0) return;
+        String sink = plugin.getConfig().getString("tax.sink", "TOWN_BANK").toUpperCase();
+        String town = region != null ? region.getTownName() : null;
+
+        if ("TOWN_BANK".equals(sink) && town != null && townyDeposit(town, tax)) {
+            plugin.getLogger().info("[Market] tax " + tax + " -> town bank: " + town);
+            return;
+        }
+        if (town != null) {
+            String prefix = plugin.getConfig().getString("tax.account-prefix", "town-");
+            economy.depositPlayer(Bukkit.getOfflinePlayer(prefix + town), tax);
+            plugin.getLogger().info("[Market] tax " + tax + " -> account: " + prefix + town);
+            return;
+        }
+        plugin.getLogger().info("[Market] tax " + tax + " burned (у региона не задан город)");
+    }
+
+    /** Депозит в банк города Towny через рефлексию (без жёсткой зависимости). */
+    private boolean townyDeposit(String townName, double amount) {
+        try {
+            Class<?> apiClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
+            Object api = apiClass.getMethod("getInstance").invoke(null);
+            Object town = apiClass.getMethod("getTown", String.class).invoke(api, townName);
+            if (town == null) return false;
+            Object account = town.getClass().getMethod("getAccount").invoke(town);
+            if (account == null) return false;
+            Method deposit = null;
+            for (Method m : account.getClass().getMethods()) {
+                if (m.getName().equals("deposit") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == double.class) { deposit = m; break; }
+            }
+            if (deposit == null) return false;
+            Object result = deposit.invoke(account, amount, "RaskolMarket tax");
+            return !(result instanceof Boolean) || (Boolean) result;
+        } catch (Throwable t) {
+            plugin.getLogger().warning("Towny deposit failed: " + t.getMessage());
+            return false;
+        }
+    }
+
+    /** Автоопределение города Towny по координате (рефлексия). */
+    public String detectTown(Location loc) {
+        try {
+            Class<?> apiClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
+            Object api = apiClass.getMethod("getInstance").invoke(null);
+            Object town = apiClass.getMethod("getTown", Location.class).invoke(api, loc);
+            if (town == null) return null;
+            return (String) town.getClass().getMethod("getName").invoke(town);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /* ================= ТИКЕР ИСТЕЧЕНИЙ ================= */
@@ -116,14 +161,13 @@ public final class MarketService {
         long now = System.currentTimeMillis();
         boolean changed = false;
         String onExpire = plugin.getConfig().getString("reclaim.on-expire", "KEEP").toUpperCase();
-        long reclaimWindow = plugin.getConfig().getLong("reclaim.window-seconds", 86400);
+        long window = plugin.getConfig().getLong("reclaim.window-seconds", 86400);
 
         for (Stall stall : repository.getStalls()) {
-            // Истекла аренда — перевод в reclaim
             if (stall.isExpired()) {
                 UUID oldOwner = stall.getOwner();
                 stall.setReclaimOwner(oldOwner);
-                stall.setReclaimUntil(now + reclaimWindow * 1000L);
+                stall.setReclaimUntil(now + window * 1000L);
 
                 Block block = getBlock(stall);
                 if (block != null && block.getState() instanceof Chest chest) {
@@ -136,25 +180,17 @@ public final class MarketService {
                     } else if ("BURN".equals(onExpire)) {
                         inv.clear();
                     }
-                    // KEEP: не трогаем сундук — арендатор заберёт через reclaim/ПКМ
                 }
                 stall.setOwner(null);
                 stall.setExpiresAt(0);
                 changed = true;
-
                 Player online = Bukkit.getPlayer(oldOwner);
-                if (online != null) {
-                    online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim");
-                }
-                plugin.getLogger().info("[Market] expired: " + stall.getKey() + " owner=" + oldOwner);
+                if (online != null) online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim");
+                plugin.getLogger().info("[Market] expired: " + stall.getKey());
             }
-            // Истёк срок reclaim — очищаем сундук
             if (stall.getReclaimOwner() != null && now > stall.getReclaimUntil()) {
                 Block block = getBlock(stall);
-                if (block != null && block.getState() instanceof Chest chest) {
-                    chest.getInventory().clear();
-                }
-                plugin.getLogger().info("[Market] reclaim expired: " + stall.getKey());
+                if (block != null && block.getState() instanceof Chest chest) chest.getInventory().clear();
                 stall.setReclaimOwner(null);
                 stall.setReclaimUntil(0);
                 changed = true;
@@ -163,7 +199,9 @@ public final class MarketService {
         if (changed) repository.save();
     }
 
-    private Block getBlock(Stall stall) {
+    /* ================= ДОСТУП К БЛОКУ ================= */
+
+    public Block getBlock(Stall stall) {
         World w = Bukkit.getWorld(stall.getWorld());
         if (w == null) return null;
         return w.getBlockAt(stall.getX(), stall.getY(), stall.getZ());
