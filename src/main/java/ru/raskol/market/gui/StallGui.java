@@ -21,6 +21,7 @@ import ru.raskol.market.model.Stall;
 import ru.raskol.market.service.MarketService;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -132,18 +133,34 @@ public final class StallGui implements Listener {
             return;
         }
 
-        // Вынимаем товар из сундука
+        // Вынимаем товар из сундука и запоминаем выданные стаки
+        List<ItemStack> taken = new ArrayList<>();
         int left = qty;
         ItemStack[] contents = chest.getInventory().getContents();
         for (int i = 0; i < contents.length && left > 0; i++) {
             ItemStack it = contents[i];
             if (it == null || !it.getType().name().equals(matName)) continue;
             int take = Math.min(left, it.getAmount());
-            if (take >= it.getAmount()) contents[i] = null;
-            else it.setAmount(it.getAmount() - take);
+            if (take >= it.getAmount()) {
+                contents[i] = null;
+                taken.add(it);
+            } else {
+                it.setAmount(it.getAmount() - take);
+                ItemStack part = it.clone();
+                part.setAmount(take);
+                taken.add(part);
+            }
             left -= take;
         }
         chest.getInventory().setContents(contents);
+
+        // ВЫДАЧА ТОВАРА ПОКУПАТЕЛЮ (инвентарь полон -> дроп под ноги)
+        for (ItemStack give : taken) {
+            HashMap<Integer, ItemStack> overflow = buyer.getInventory().addItem(give);
+            for (ItemStack drop : overflow.values()) {
+                buyer.getWorld().dropItem(buyer.getLocation(), drop);
+            }
+        }
 
         // Выплаты: продавец 95%, налог 5%
         double taxPercent = plugin.getConfig().getDouble("tax.percent", 5.0);
