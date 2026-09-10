@@ -6,13 +6,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.block.Action;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.gui.StallGui;
 import ru.raskol.market.model.MarketRegion;
 import ru.raskol.market.model.Stall;
 
@@ -31,8 +32,7 @@ public final class MarketProtectionListener implements Listener {
         Player player = event.getPlayer();
         if (player.hasPermission("market.admin")) return;
         Location loc = event.getBlock().getLocation();
-        MarketRegion region = repository.getRegionAt(loc);
-        if (region != null) {
+        if (repository.getRegionAt(loc) != null) {
             event.setCancelled(true);
             player.sendMessage("§cНельзя ломать блоки в регионе рынка!");
         }
@@ -43,8 +43,7 @@ public final class MarketProtectionListener implements Listener {
         Player player = event.getPlayer();
         if (player.hasPermission("market.admin")) return;
         Location loc = event.getBlock().getLocation();
-        MarketRegion region = repository.getRegionAt(loc);
-        if (region != null) {
+        if (repository.getRegionAt(loc) != null) {
             event.setCancelled(true);
             player.sendMessage("§cНельзя ставить блоки в регионе рынка!");
         }
@@ -55,36 +54,28 @@ public final class MarketProtectionListener implements Listener {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
         Block block = event.getClickedBlock();
         if (block == null) return;
-        String key = Stall.keyOf(block.getLocation());
-        Stall stall = repository.getStall(key);
+        Stall stall = repository.getStall(Stall.keyOf(block.getLocation()));
         if (stall == null) return;
 
         Player player = event.getPlayer();
 
-        // Арендатор имеет право открывать сундук своего прилавка как обычный
-        if (stall.isRented() && player.getUniqueId().equals(stall.getOwner())) {
-            // не отменяем — Bukkit сам откроет vanilla chest inventory
-            return;
-        }
+        // Владелец открывает сундук как обычный инвентарь
+        if (stall.isRented() && player.getUniqueId().equals(stall.getOwner())) return;
 
         event.setCancelled(true);
 
         if (!stall.isRented()) {
-            player.sendMessage("§6Этот прилавок свободен. Используй §e/market rent §6чтобы арендовать.");
+            player.sendMessage("§6Прилавок свободен. Аренда: §e/market rent");
             return;
         }
-
-        // GUI покупателя будет на Этапе 4
-        player.sendMessage("§eЛавка арендована. GUI покупателя появится в следующем обновлении.");
+        // Покупатель видит витрину
+        new StallGui(plugin, repository, plugin.getService()).open(player, stall);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryMove(InventoryMoveItemEvent event) {
         Location sourceLoc = event.getSource().getLocation();
         if (sourceLoc == null) return;
-        String key = Stall.keyOf(sourceLoc);
-        if (repository.getStall(key) != null) {
-            event.setCancelled(true);
-        }
+        if (repository.getStall(Stall.keyOf(sourceLoc)) != null) event.setCancelled(true);
     }
 }
