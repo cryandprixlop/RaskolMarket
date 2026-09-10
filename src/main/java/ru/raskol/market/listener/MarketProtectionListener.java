@@ -10,6 +10,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.block.Action;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
 import ru.raskol.market.model.MarketRegion;
@@ -51,13 +52,21 @@ public final class MarketProtectionListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerInteract(PlayerInteractEvent event) {
-        if (event.getClickedBlock() == null) return;
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
         Block block = event.getClickedBlock();
+        if (block == null) return;
         String key = Stall.keyOf(block.getLocation());
         Stall stall = repository.getStall(key);
         if (stall == null) return;
 
         Player player = event.getPlayer();
+
+        // Арендатор имеет право открывать сундук своего прилавка как обычный
+        if (stall.isRented() && player.getUniqueId().equals(stall.getOwner())) {
+            // не отменяем — Bukkit сам откроет vanilla chest inventory
+            return;
+        }
+
         event.setCancelled(true);
 
         if (!stall.isRented()) {
@@ -65,11 +74,8 @@ public final class MarketProtectionListener implements Listener {
             return;
         }
 
-        if (stall.getOwner().equals(player.getUniqueId())) {
-            player.sendMessage("§aЭто ваша лавка. Используй §e/market manage §aдля управления.");
-        } else {
-            player.sendMessage("§eЭтот прилавок арендован. GUI покупателя будет на Этапе 4.");
-        }
+        // GUI покупателя будет на Этапе 4
+        player.sendMessage("§eЛавка арендована. GUI покупателя появится в следующем обновлении.");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
