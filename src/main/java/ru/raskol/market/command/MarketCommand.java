@@ -1,11 +1,5 @@
 package ru.raskol.market.command;
 
-import com.sk89q.worldedit.IncompleteRegionException;
-import com.sk89q.worldedit.LocalSession;
-import com.sk89q.worldedit.bukkit.BukkitAdapter;
-import com.sk89q.worldedit.math.BlockVector3;
-import com.sk89q.worldedit.regions.Region;
-import com.sk89q.worldedit.world.World;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
@@ -14,11 +8,13 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
 import ru.raskol.market.model.MarketRegion;
 import ru.raskol.market.model.Stall;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -92,6 +88,10 @@ public final class MarketCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    /**
+     * Создание региона через рефлексию WorldEdit API.
+     * Работает с любой версией WorldEdit, не требует жёсткой зависимости в pom.xml.
+     */
     private void createRegion(Player player, String[] args) {
         if (args.length < 3) {
             player.sendMessage("§cИспользуй: /market region create <id>");
@@ -103,32 +103,70 @@ public final class MarketCommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        Plugin wePlugin = Bukkit.getPluginManager().getPlugin("WorldEdit");
+        if (wePlugin == null) {
+            player.sendMessage("§cWorldEdit не найден. Установи WorldEdit для создания регионов.");
+            return;
+        }
+
         try {
-            Class<?> weClass = Class.forName("com.sk89q.worldedit.bukkit.WorldEditPlugin");
-            Object wePlugin = Bukkit.getPluginManager().getPlugin("WorldEdit");
-            if (wePlugin == null) {
-                player.sendMessage("§cWorldEdit не найден. Установи WorldEdit для создания регионов.");
+            //getSession(player)
+            Method getSession = wePlugin.getClass().getMethod("getSession", Player.class);
+            Object session = getSession.invoke(wePlugin, player);
+            if (session == null) {
+                player.sendMessage("§cНе удалось получить сессию WorldEdit. Выдели регион: //wand, //pos1, //pos2.");
                 return;
             }
 
-            LocalSession session = ((com.sk89q.worldedit.bukkit.WorldEditPlugin) wePlugin).getSession(player);
-            World weWorld = BukkitAdapter.adapt(player.getWorld());
-            Region region = session.getSelection(weWorld);
-            BlockVector3 min = region.getMinimumPoint();
-            BlockVector3 max = region.getMaximumPoint();
+            //session.getSelection(BukkitAdapter.adapt(player.getWorld()))
+            //Сначала получаем WorldEdit-мир через статический BukkitAdapter.adapt
+            Class<?> bukkitAdapterClass = Class.forName("com.sk89q.worldedit.bukkit.BukkitAdapter");
+            Method adaptWorld = bukkitAdapterClass.getMethod("adapt", org.bukkit.World.class);
+            Object weWorld = adaptWorld.invoke(null, player.getWorld());
+
+            Method getSelection = session.getClass().getMethod("getSelection",
+                    Class.forName("com.sk89q.worldedit.world.World"));
+            Object region = getSelection.invoke(session, weWorld);
+
+            //region.getMinimumPoint() / getMaximumPoint()
+            Method getMinPoint = region.getClass().getMethod("getMinimumPoint");
+            Method getMaxPoint = region.getClass().getMethod("getMaximumPoint");
+            Object minVec = getMinPoint.invoke(region);
+            Object maxVec = getMaxPoint.invoke(region);
+
+            //BlockVector3.x(), .y(), .z()
+            Method x = minVec.getClass().getMethod("x");
+            Method y = minVec.getClass().getMethod("y");
+            Method z = minVec.getClass().getMethod("z");
+            int minX = ((Number) x.invoke(minVec)).intValue();
+            int minY = ((Number) y.invoke(minVec)).intValue();
+            int minZ = ((Number) z.invoke(minVec)).intValue();
+            int maxX = ((Number) x.invoke(maxVec)).intValue();
+            int maxY = ((Number) y.invoke(maxVec)).intValue();
+            int maxZ = ((Number) z.invoke(maxVec)).intValue();
 
             MarketRegion marketRegion = new MarketRegion(id,
                     player.getWorld().getName(),
-                    min.x(), min.y(), min.z(),
-                    max.x(), max.y(), max.z());
+                    minX, minY, minZ,
+                    maxX, maxY, maxZ);
             repository.addRegion(marketRegion);
             repository.save();
 
             player.sendMessage("§aРегион '" + id + "' создан!");
-            player.sendMessage("§7Координаты: (" + min.x() + "," + min.y() + "," + min.z()
-                    + ") — (" + max.x() + "," + max.y() + "," + max.z() + ")");
-        } catch (ClassNotFoundException | IncompleteRegionException e) {
-            player.sendMessage("§cОшибка: выдели регион через WorldEdit (//wand, //pos1, //pos2).");
+            player.sendMessage("§7Координаты: (" + minX + "," + minY + "," + minZ
+                    + ") — (" + maxX + "," + maxY + "," + maxZ + ")");
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            String msg = cause.getClass().getSimpleName();
+            if (msg.contains("Incomplete")) {
+                player.sendMessage("§cОшибка: выдели регион через WorldEdit (//wand, //pos1, //pos2).");
+            } else if (msg.contains("NoSuchMethod") || msg.contains("ClassNotFound")) {
+                player.sendMessage("§cОшибка API WorldEdit: " + msg + ". Возможно, версия WorldEdit слишком новая/старая.");
+                plugin.getLogger().warning("WorldEdit reflection error: " + e.getMessage());
+            } else {
+                player.sendMessage("§cОшибка создания региона: " + cause.getMessage());
+                plugin.getLogger().warning("createRegion error: " + e.getMessage());
+            }
         }
     }
 
