@@ -1,7 +1,10 @@
 package ru.raskol.market;
 
+import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
+import ru.raskol.market.command.MarketCommand;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.listener.MarketProtectionListener;
 
 public final class RaskolMarket extends JavaPlugin {
 
@@ -12,6 +15,16 @@ public final class RaskolMarket extends JavaPlugin {
         saveDefaultConfig();
         repository = new MarketRepository(this);
         repository.load();
+
+        PluginCommand cmd = getCommand("market");
+        if (cmd != null) {
+            MarketCommand executor = new MarketCommand(this, repository);
+            cmd.setExecutor(executor);
+            cmd.setTabCompleter(executor);
+        }
+
+        getServer().getPluginManager().registerEvents(
+                new MarketProtectionListener(this, repository), this);
 
         long every5min = 20L * 60 * 5;
         getServer().getScheduler().runTaskTimerAsynchronously(
