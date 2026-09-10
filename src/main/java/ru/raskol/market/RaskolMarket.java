@@ -6,6 +6,7 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import ru.raskol.market.command.MarketCommand;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.gui.StallGui;
 import ru.raskol.market.listener.MarketProtectionListener;
 import ru.raskol.market.service.MarketService;
 
@@ -30,7 +31,6 @@ public final class RaskolMarket extends JavaPlugin {
 
         repository = new MarketRepository(this);
         repository.load();
-
         service = new MarketService(this, repository, economy);
 
         PluginCommand cmd = getCommand("market");
@@ -42,16 +42,13 @@ public final class RaskolMarket extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(
                 new MarketProtectionListener(this, repository), this);
+        getServer().getPluginManager().registerEvents(
+                new StallGui(this, repository, service), this);
 
-        // Автосохранение каждые 5 минут
         long every5min = 20L * 60 * 5;
-        getServer().getScheduler().runTaskTimerAsynchronously(
-                this, repository::save, every5min, every5min);
-
-        // Тикер истечений аренд каждые 30 секунд
+        getServer().getScheduler().runTaskTimerAsynchronously(this, repository::save, every5min, every5min);
         long every30s = 20L * 30;
-        getServer().getScheduler().runTaskTimerAsynchronously(
-                this, service::tickExpired, every30s, every30s);
+        getServer().getScheduler().runTaskTimerAsynchronously(this, service::tickExpired, every30s, every30s);
 
         getLogger().info("RaskolMarket v" + getDescription().getVersion()
                 + " включён. Регионов: " + repository.getRegions().size()
