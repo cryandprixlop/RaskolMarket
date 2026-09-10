@@ -1,0 +1,15 @@
+name: RaskolMarket
+version: ${project.version}
+main: ru.raskol.market.RaskolMarket
+api-version: '1.21'
+author: Baltimor
+description: Городские рынки - аренда лавок и торговля игроков с налогом.
+softdepend: [Vault, Towny, WorldEdit]
+commands:
+  market:
+    description: Управление рынком
+    usage: /market help
+permissions:
+  market.admin:
+    description: Администрирование рынков
+    default: op
