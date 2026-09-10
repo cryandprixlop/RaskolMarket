@@ -1,0 +1,14 @@
+# ===== RaskolMarket: городские рынки =====
+rent:
+  price: 500.0            # цена аренды лавки (если у региона нет своей)
+  duration-seconds: 3600  # длительность аренды (3600 = 1 час)
+  max-per-player: 1       # сколько лавок одновременно у одного игрока
+reclaim:
+  window-seconds: 86400   # срок возврата остатков после истечения (24 ч)
+  on-expire: KEEP         # KEEP (хранить) | DROP (выпасть у лавки) | BURN (сжечь)
+tax:
+  percent: 5.0            # налог с суммы продажи
+  sink: TOWN_BANK         # TOWN_BANK (казна города Towny) | ACCOUNT (оффлайн-аккаунт) | BURN
+  account-prefix: "town-"
+buy:
+  shift-stack: 64         # сколько штук покупает shift-клик
