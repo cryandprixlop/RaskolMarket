@@ -16,7 +16,9 @@ import ru.raskol.market.model.MarketRegion;
 import ru.raskol.market.model.Stall;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.UUID;
 
 /** Логика рынка: аренда, сдача, возврат, истечения, налог с продаж. */
@@ -155,55 +157,30 @@ public final class MarketService {
         }
     }
 
-    /* ================= ТИКЕР ИСТЕЧЕНИЙ ================= */
+    /* ================= ТИКЕР ИСТЕЧЕНИЙ (АСИНХРОННАЯ ЧАСТЬ) ================= */
 
+    /**
+     * Проверяет истечения и собирает список лавок для обработки.
+     * Вызывается из async-потока, НЕ работает с блоками.
+     */
     public void tickExpired() {
         long now = System.currentTimeMillis();
-        boolean changed = false;
         String onExpire = plugin.getConfig().getString("reclaim.on-expire", "KEEP").toUpperCase();
         long window = plugin.getConfig().getLong("reclaim.window-seconds", 86400);
 
+        List<Stall> expiredStalls = new ArrayList<>();
+        List<Stall> reclaimExpiredStalls = new ArrayList<>();
+        boolean changed = false;
+
+        // Проход 1: собираем истёкшие лавки (async, без работы с блоками)
         for (Stall stall : repository.getStalls()) {
             if (stall.isExpired()) {
                 UUID oldOwner = stall.getOwner();
                 stall.setReclaimOwner(oldOwner);
                 stall.setReclaimUntil(now + window * 1000L);
-
-                Block block = getBlock(stall);
-                if (block != null && block.getState() instanceof Chest chest) {
-                    Inventory inv = chest.getInventory();
-                    if ("DROP".equals(onExpire)) {
-                        for (ItemStack item : inv.getContents()) {
-                            if (item != null) block.getWorld().dropItem(block.getLocation(), item);
-                        }
-                        inv.clear();
-                    } else if ("BURN".equals(onExpire)) {
-                        inv.clear();
-                    }
-                }
                 stall.setOwner(null);
                 stall.setExpiresAt(0);
+                expiredStalls.add(stall);
                 changed = true;
-                Player online = Bukkit.getPlayer(oldOwner);
-                if (online != null) online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim");
-                plugin.getLogger().info("[Market] expired: " + stall.getKey());
-            }
-            if (stall.getReclaimOwner() != null && now > stall.getReclaimUntil()) {
-                Block block = getBlock(stall);
-                if (block != null && block.getState() instanceof Chest chest) chest.getInventory().clear();
-                stall.setReclaimOwner(null);
-                stall.setReclaimUntil(0);
-                changed = true;
-            }
-        }
-        if (changed) repository.save();
-    }
-
-    /* ================= ДОСТУП К БЛОКУ ================= */
-
-    public Block getBlock(Stall stall) {
-        World w = Bukkit.getWorld(stall.getWorld());
-        if (w == null) return null;
-        return w.getBlockAt(stall.getX(), stall.getY(), stall.getZ());
-    }
-}
+                
+                Player online = Bukkit.getPlayer(oldOwner
