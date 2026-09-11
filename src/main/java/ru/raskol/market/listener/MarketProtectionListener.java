@@ -11,9 +11,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
-import org.bukkit.event.inventory.EquipmentSlot;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
 import ru.raskol.market.gui.ShopView;
@@ -76,7 +76,9 @@ public final class MarketProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
-        if (event.getHand() != EquipmentSlot.HAND) return; // защита от двойного срабатывания (off-hand)
+        // Защита от двойного срабатывания (main-hand + off-hand)
+        EquipmentSlot hand = event.getHand();
+        if (hand != null && hand != EquipmentSlot.HAND) return;
         if (event.getClickedBlock() == null) return;
 
         Block block = event.getClickedBlock();
