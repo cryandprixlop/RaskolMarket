@@ -1,41 +1,43 @@
 package ru.raskol.market;
 
 import net.milkbowl.vault.economy.Economy;
+import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import ru.raskol.market.command.MarketCommand;
 import ru.raskol.market.data.MarketRepository;
-import ru.raskol.market.gui.StallGui;
 import ru.raskol.market.listener.MarketProtectionListener;
+import ru.raskol.market.listener.ShopInteractionListener;
 import ru.raskol.market.service.MarketService;
+import ru.raskol.market.service.PurchaseService;
 
 public final class RaskolMarket extends JavaPlugin {
 
     private MarketRepository repository;
-    private MarketService service;
-    private Economy economy;
+    private MarketService marketService;
+    private PurchaseService purchaseService;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
-        RegisteredServiceProvider<Economy> rsp =
-                getServer().getServicesManager().getRegistration(Economy.class);
-        if (rsp == null) {
-            getLogger().severe("Vault/Economy не найдены — плагин отключён.");
-            getServer().getPluginManager().disablePlugin(this);
+        Economy economy = setupEconomy();
+        if (economy == null) {
+            getLogger().severe("Vault/экономика не найдена — плагин отключён.");
+            Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
-        economy = rsp.getProvider();
 
         repository = new MarketRepository(this);
         repository.load();
-        service = new MarketService(this, repository, economy);
+
+        marketService = new MarketService(this, repository, economy);
+        purchaseService = new PurchaseService(this, repository, economy, marketService);
 
         PluginCommand cmd = getCommand("market");
         if (cmd != null) {
-            MarketCommand executor = new MarketCommand(this, repository, service);
+            MarketCommand executor = new MarketCommand(this, repository);
             cmd.setExecutor(executor);
             cmd.setTabCompleter(executor);
         }
@@ -43,12 +45,16 @@ public final class RaskolMarket extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new MarketProtectionListener(this, repository), this);
         getServer().getPluginManager().registerEvents(
-                new StallGui(this, repository, service), this);
+                new ShopInteractionListener(this, repository, purchaseService), this);
+
+        // Тикер истечений — async, но работает с блоками через runTask внутри
+        long everySecond = 20L;
+        getServer().getScheduler().runTaskTimerAsynchronously(
+                this, () -> marketService.tickExpired(), everySecond, everySecond);
 
         long every5min = 20L * 60 * 5;
-        getServer().getScheduler().runTaskTimerAsynchronously(this, repository::save, every5min, every5min);
-        long every30s = 20L * 30;
-        getServer().getScheduler().runTaskTimerAsynchronously(this, service::tickExpired, every30s, every30s);
+        getServer().getScheduler().runTaskTimerAsynchronously(
+                this, () -> repository.save(), every5min, every5min);
 
         getLogger().info("RaskolMarket v" + getDescription().getVersion()
                 + " включён. Регионов: " + repository.getRegions().size()
@@ -61,7 +67,14 @@ public final class RaskolMarket extends JavaPlugin {
         if (repository != null) repository.save();
     }
 
+    private Economy setupEconomy() {
+        if (Bukkit.getPluginManager().getPlugin("Vault") == null) return null;
+        RegisteredServiceProvider<Economy> rsp =
+                getServer().getServicesManager().getRegistration(Economy.class);
+        return rsp == null ? null : rsp.getProvider();
+    }
+
     public MarketRepository getRepository() { return repository; }
-    public MarketService getService() { return service; }
-    public Economy getEconomy() { return economy; }
+    public MarketService getMarketService() { return marketService; }
+    public PurchaseService getPurchaseService() { return purchaseService; }
 }
