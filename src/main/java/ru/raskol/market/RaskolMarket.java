@@ -17,12 +17,13 @@ public final class RaskolMarket extends JavaPlugin {
     private MarketRepository repository;
     private MarketService marketService;
     private PurchaseService purchaseService;
+    private Economy economy;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
-        Economy economy = setupEconomy();
+        economy = setupEconomy();
         if (economy == null) {
             getLogger().severe("Vault/экономика не найдена — плагин отключён.");
             Bukkit.getPluginManager().disablePlugin(this);
@@ -37,7 +38,7 @@ public final class RaskolMarket extends JavaPlugin {
 
         PluginCommand cmd = getCommand("market");
         if (cmd != null) {
-            MarketCommand executor = new MarketCommand(this, repository);
+            MarketCommand executor = new MarketCommand(this, repository, marketService);
             cmd.setExecutor(executor);
             cmd.setTabCompleter(executor);
         }
@@ -77,4 +78,5 @@ public final class RaskolMarket extends JavaPlugin {
     public MarketRepository getRepository() { return repository; }
     public MarketService getMarketService() { return marketService; }
     public PurchaseService getPurchaseService() { return purchaseService; }
+    public Economy getEconomy() { return economy; }
 }
