@@ -4,6 +4,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.block.Block;
+import org.bukkit.block.Chest;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -97,7 +98,11 @@ public final class MarketProtectionListener implements Listener {
         // --- Владелец прилавка ---
         if (stall.getOwner() != null && stall.getOwner().equals(player.getUniqueId())) {
             if (player.isSneaking()) {
-                // Shift+ПКМ: НЕ отменяем событие — откроется настоящий сундук для пополнения товара
+                // Shift+ПКМ: принудительно открываем сундук, минуя все защиты (Towny/WorldGuard)
+                event.setCancelled(true);
+                if (block.getState() instanceof Chest chest) {
+                    player.openInventory(chest.getInventory());
+                }
                 return;
             }
             event.setCancelled(true);
