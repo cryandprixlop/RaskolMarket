@@ -183,4 +183,60 @@ public final class MarketService {
                 expiredStalls.add(stall);
                 changed = true;
                 
-                Player online = Bukkit.getPlayer(oldOwner
+                Player online = Bukkit.getPlayer(oldOwner);
+                if (online != null) {
+                    Bukkit.getScheduler().runTask(plugin, () -> 
+                        online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim")
+                    );
+                }
+                plugin.getLogger().info("[Market] expired: " + stall.getKey());
+            }
+            if (stall.getReclaimOwner() != null && now > stall.getReclaimUntil()) {
+                reclaimExpiredStalls.add(stall);
+                stall.setReclaimOwner(null);
+                stall.setReclaimUntil(0);
+                changed = true;
+            }
+        }
+
+        // Проход 2: обработка блоков в main-потоке
+        if (!expiredStalls.isEmpty() || !reclaimExpiredStalls.isEmpty()) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                // Обработка истёкших лавок
+                for (Stall stall : expiredStalls) {
+                    Block block = getBlock(stall);
+                    if (block != null && block.getState() instanceof Chest chest) {
+                        Inventory inv = chest.getInventory();
+                        if ("DROP".equals(onExpire)) {
+                            for (ItemStack item : inv.getContents()) {
+                                if (item != null) block.getWorld().dropItem(block.getLocation(), item);
+                            }
+                            inv.clear();
+                        } else if ("BURN".equals(onExpire)) {
+                            inv.clear();
+                        }
+                        // KEEP: ничего не делаем, содержимое остаётся
+                    }
+                }
+                
+                // Обработка лавок с истёкшим reclaim
+                for (Stall stall : reclaimExpiredStalls) {
+                    Block block = getBlock(stall);
+                    if (block != null && block.getState() instanceof Chest chest) {
+                        chest.getInventory().clear();
+                    }
+                }
+            });
+        }
+
+        if (changed) repository.save();
+    }
+
+    /* ================= ДОСТУП К БЛОКУ ================= */
+
+    public Block getBlock(Stall stall) {
+        World w = Bukkit.getWorld(stall.getWorld());
+        if (w == null) return null;
+        return w.getBlockAt(stall.getX(), stall.getY(), stall.getZ());
+    }
+}
