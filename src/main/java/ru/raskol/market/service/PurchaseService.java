@@ -51,7 +51,7 @@ public final class PurchaseService {
             return false;
         }
 
-        // Проверка: арендатор не может покупать у себя
+        // Арендатор не может покупать у себя
         if (stall.getOwner() != null && stall.getOwner().equals(buyer.getUniqueId())) {
             buyer.sendMessage("§cНельзя покупать у самого себя.");
             return false;
@@ -80,7 +80,6 @@ public final class PurchaseService {
         // Забираем предметы из сундука
         int taken = takeFromChest(chest, source, toBuy);
         if (taken < toBuy) {
-            // Вернуть деньги за недостающее
             double refund = unitPrice * (toBuy - taken);
             economy.depositPlayer(buyer, refund);
             totalCost -= refund;
@@ -95,12 +94,11 @@ public final class PurchaseService {
             buyer.getWorld().dropItem(buyer.getLocation(), drop);
         }
 
-        // Распределение денег
+        // Распределение денег: 95% продавцу, 5% налог
         double taxPercent = plugin.getConfig().getDouble("tax.percent", 5.0) / 100.0;
         double tax = totalCost * taxPercent;
         double sellerGets = totalCost - tax;
 
-        // Продавцу (арендатору)
         if (stall.getOwner() != null) {
             OfflinePlayer seller = Bukkit.getOfflinePlayer(stall.getOwner());
             economy.depositPlayer(seller, sellerGets);
@@ -111,8 +109,16 @@ public final class PurchaseService {
             }
         }
 
-        // Налог в казну города
+        // ЭТАП 6: налог в банк города; если город не задан — автоопределение по координате
         MarketRegion region = repository.getRegion(stall.getRegionId());
+        if (region != null && region.getTownName() == null) {
+            String town = marketService.detectTown(block.getLocation());
+            if (town != null) {
+                region.setTownName(town);
+                repository.save();
+                plugin.getLogger().info("[Market] auto-town for region " + region.getId() + ": " + town);
+            }
+        }
         marketService.paySaleTax(region, tax);
 
         buyer.sendMessage("§aКуплено §e" + toBuy + "x " + source.getType().name()
@@ -124,7 +130,7 @@ public final class PurchaseService {
         return true;
     }
 
-    /** Сколько штук данного материала (по типу+durability) лежит в сундуке. */
+    /** Сколько штук данного материала лежит в сундуке. */
     private int countInChest(Chest chest, ItemStack sample) {
         int total = 0;
         for (ItemStack s : chest.getInventory().getContents()) {
