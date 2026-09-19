@@ -7,7 +7,9 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import ru.raskol.market.command.MarketCommand;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.listener.ManageGuiListener;
 import ru.raskol.market.listener.MarketProtectionListener;
+import ru.raskol.market.listener.PriceInputListener;
 import ru.raskol.market.listener.ShopInteractionListener;
 import ru.raskol.market.service.MarketService;
 import ru.raskol.market.service.PurchaseService;
@@ -43,12 +45,17 @@ public final class RaskolMarket extends JavaPlugin {
             cmd.setTabCompleter(executor);
         }
 
+        PriceInputListener priceInputListener = new PriceInputListener(this, repository);
+
         getServer().getPluginManager().registerEvents(
                 new MarketProtectionListener(this, repository), this);
         getServer().getPluginManager().registerEvents(
                 new ShopInteractionListener(this, repository, purchaseService), this);
+        getServer().getPluginManager().registerEvents(
+                new ManageGuiListener(this, repository, priceInputListener), this);
+        getServer().getPluginManager().registerEvents(priceInputListener, this);
 
-        // Тикер истечений — async, но работает с блоками через runTask внутри
+        // Тикер истечений
         long everySecond = 20L;
         getServer().getScheduler().runTaskTimerAsynchronously(
                 this, () -> marketService.tickExpired(), everySecond, everySecond);
