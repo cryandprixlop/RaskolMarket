@@ -17,6 +17,7 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import ru.raskol.market.RaskolMarket;
 import ru.raskol.market.data.MarketRepository;
+import ru.raskol.market.gui.ManageGui;
 import ru.raskol.market.gui.ShopView;
 import ru.raskol.market.model.MarketRegion;
 import ru.raskol.market.model.Stall;
@@ -24,7 +25,7 @@ import ru.raskol.market.model.Stall;
 /**
  * Защита региона рынка и прилавков + маршрутизация ПКМ:
  * свободный прилавок -> подсказка аренды,
- * владелец -> подсказка / Shift+ПКМ открывает настоящий сундук,
+ * владелец -> Shift+ПКМ сундук / ПКМ GUI управления,
  * покупатель -> GUI-витрина ShopView.
  */
 public final class MarketProtectionListener implements Listener {
@@ -77,7 +78,6 @@ public final class MarketProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
-        // Защита от двойного срабатывания (main-hand + off-hand)
         EquipmentSlot hand = event.getHand();
         if (hand != null && hand != EquipmentSlot.HAND) return;
         if (event.getClickedBlock() == null) return;
@@ -98,17 +98,17 @@ public final class MarketProtectionListener implements Listener {
         // --- Владелец прилавка ---
         if (stall.getOwner() != null && stall.getOwner().equals(player.getUniqueId())) {
             if (player.isSneaking()) {
-                // Shift+ПКМ: принудительно открываем сундук, минуя все защиты (Towny/WorldGuard)
+                // Shift+ПКМ: открываем настоящий сундук для пополнения товара
                 event.setCancelled(true);
                 if (block.getState() instanceof Chest chest) {
                     player.openInventory(chest.getInventory());
                 }
                 return;
             }
+            // ПКМ: открываем GUI управления ценами
             event.setCancelled(true);
-            player.sendMessage("§aЭто ваша лавка.");
-            player.sendMessage("§7Пополнить товар: §eShift+ПКМ §7по сундуку.");
-            player.sendMessage("§7Назначить цену: §e/market price <материал> <цена>");
+            ManageGui gui = new ManageGui(stall);
+            player.openInventory(gui.getInventory());
             return;
         }
 
