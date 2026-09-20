@@ -4,6 +4,7 @@ import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Chest;
@@ -58,7 +59,7 @@ public final class MarketService {
         stall.getReclaimItems().clear();
         repository.save();
         player.sendMessage("§aАренда оформлена! Срок: §e" + (seconds / 60) + " минут§a.");
-        player.sendMessage("§7Открой сундук, выложи товары, назначь цены: §e/market price <материал> <цена>");
+        player.sendMessage("§7Shift+ПКМ — положить товар, ПКМ — назначить цены.");
         plugin.getLogger().info("[Market] rent: " + player.getName() + " @ " + stall.getKey()
                 + " price=" + price + " seconds=" + seconds);
     }
@@ -73,6 +74,8 @@ public final class MarketService {
         stall.setReclaimUntil(System.currentTimeMillis() + window * 1000L);
         stall.setOwner(null);
         stall.setExpiresAt(0);
+        // Main-поток (команда): переносим содержимое сундука в reclaim-хранилище
+        moveChestToReclaim(stall);
         repository.save();
         player.sendMessage("§aЛавка сдана досрочно. Забери остатки: §e/market reclaim");
     }
@@ -86,6 +89,14 @@ public final class MarketService {
             player.sendMessage("§cСрок возврата истёк.");
             stall.setReclaimOwner(null);
             stall.setReclaimUntil(0);
+            stall.getReclaimItems().clear();
+            repository.save();
+            return;
+        }
+        if (stall.getReclaimItems().isEmpty()) {
+            player.sendMessage("§7Остатков нет — сундук был пуст.");
+            stall.setReclaimOwner(null);
+            stall.setReclaimUntil(0);
             repository.save();
             return;
         }
@@ -97,7 +108,7 @@ public final class MarketService {
         stall.setReclaimOwner(null);
         stall.setReclaimUntil(0);
         repository.save();
-        player.sendMessage("§aОстатки возвращены. Содержимое сундука забери обычным ПКМ.");
+        player.sendMessage("§aОстатки возвращены в инвентарь.");
     }
 
     /* ================= НАЛОГ С ПРОДАЖ ================= */
@@ -157,11 +168,11 @@ public final class MarketService {
         }
     }
 
-    /* ================= ТИКЕР ИСТЕЧЕНИЙ (АСИНХРОННАЯ ЧАСТЬ) ================= */
+    /* ================= ТИКЕР ИСТЕЧЕНИЙ ================= */
 
     /**
-     * Проверяет истечения и собирает список лавок для обработки.
-     * Вызывается из async-потока, НЕ работает с блоками.
+     * Async-проход: проверка времени и флагов.
+     * Вся работа с блоками — внутри sync-задачи.
      */
     public void tickExpired() {
         long now = System.currentTimeMillis();
@@ -170,9 +181,7 @@ public final class MarketService {
 
         List<Stall> expiredStalls = new ArrayList<>();
         List<Stall> reclaimExpiredStalls = new ArrayList<>();
-        boolean changed = false;
 
-        // Проход 1: собираем истёкшие лавки (async, без работы с блоками)
         for (Stall stall : repository.getStalls()) {
             if (stall.isExpired()) {
                 UUID oldOwner = stall.getOwner();
@@ -181,13 +190,11 @@ public final class MarketService {
                 stall.setOwner(null);
                 stall.setExpiresAt(0);
                 expiredStalls.add(stall);
-                changed = true;
-                
+
                 Player online = Bukkit.getPlayer(oldOwner);
                 if (online != null) {
-                    Bukkit.getScheduler().runTask(plugin, () -> 
-                        online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim")
-                    );
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            online.sendMessage("§cАренда лавки истекла! Забери остатки: §e/market reclaim"));
                 }
                 plugin.getLogger().info("[Market] expired: " + stall.getKey());
             }
@@ -195,41 +202,78 @@ public final class MarketService {
                 reclaimExpiredStalls.add(stall);
                 stall.setReclaimOwner(null);
                 stall.setReclaimUntil(0);
-                changed = true;
+                stall.getReclaimItems().clear();
             }
         }
 
-        // Проход 2: обработка блоков в main-потоке
-        if (!expiredStalls.isEmpty() || !reclaimExpiredStalls.isEmpty()) {
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                // Обработка истёкших лавок
-                for (Stall stall : expiredStalls) {
-                    Block block = getBlock(stall);
+        if (expiredStalls.isEmpty() && reclaimExpiredStalls.isEmpty()) return;
+
+        // Sync-проход: работа с сундуками + сохранение
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            for (Stall stall : expiredStalls) {
+                Block block = getBlock(stall);
+                if ("DROP".equals(onExpire)) {
                     if (block != null && block.getState() instanceof Chest chest) {
-                        Inventory inv = chest.getInventory();
-                        if ("DROP".equals(onExpire)) {
-                            for (ItemStack item : inv.getContents()) {
-                                if (item != null) block.getWorld().dropItem(block.getLocation(), item);
-                            }
-                            inv.clear();
-                        } else if ("BURN".equals(onExpire)) {
-                            inv.clear();
+                        for (ItemStack item : chest.getInventory().getContents()) {
+                            if (item != null) block.getWorld().dropItem(block.getLocation(), item);
                         }
-                        // KEEP: ничего не делаем, содержимое остаётся
+                        chest.getInventory().clear();
                     }
-                }
-                
-                // Обработка лавок с истёкшим reclaim
-                for (Stall stall : reclaimExpiredStalls) {
-                    Block block = getBlock(stall);
+                } else if ("BURN".equals(onExpire)) {
                     if (block != null && block.getState() instanceof Chest chest) {
                         chest.getInventory().clear();
                     }
+                } else {
+                    // KEEP (по умолчанию): предметы уходят в reclaim-хранилище, сундук очищается
+                    moveChestToReclaim(stall);
                 }
-            });
-        }
+            }
+            for (Stall stall : reclaimExpiredStalls) {
+                Block block = getBlock(stall);
+                if (block != null && block.getState() instanceof Chest chest) {
+                    chest.getInventory().clear();
+                }
+            }
+            repository.save();
+        });
+    }
 
-        if (changed) repository.save();
+    /* ================= ПЕРЕНОС СУНДУКА В RECLAIM ================= */
+
+    /** Перенести всё содержимое сундука в reclaim-хранилище лавки и очистить сундук. Вызывать ТОЛЬКО в main-потоке. */
+    private void moveChestToReclaim(Stall stall) {
+        Block block = getBlock(stall);
+        if (block == null) return;
+        if (!(block.getState() instanceof Chest chest)) return;
+        Inventory inv = chest.getInventory();
+        for (ItemStack item : inv.getContents()) {
+            if (item == null || item.getType() == Material.AIR) continue;
+            addToReclaim(stall, item.clone());
+        }
+        inv.clear();
+    }
+
+    /** Добавить предмет в reclaim-список с объединением стеков до maxStackSize. */
+    private void addToReclaim(Stall stall, ItemStack add) {
+        List<ItemStack> list = stall.getReclaimItems();
+        int remaining = add.getAmount();
+        int max = add.getMaxStackSize();
+        for (ItemStack existing : list) {
+            if (remaining <= 0) break;
+            if (!existing.isSimilar(add)) continue;
+            int space = max - existing.getAmount();
+            if (space <= 0) continue;
+            int move = Math.min(space, remaining);
+            existing.setAmount(existing.getAmount() + move);
+            remaining -= move;
+        }
+        while (remaining > 0) {
+            int move = Math.min(remaining, max);
+            ItemStack part = add.clone();
+            part.setAmount(move);
+            list.add(part);
+            remaining -= move;
+        }
     }
 
     /* ================= ДОСТУП К БЛОКУ ================= */
